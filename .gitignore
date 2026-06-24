@@ -14,3 +14,6 @@ __pycache__/
 # Editor settings
 .vscode/
 .idea/
+
+# Personal learning log — keep this local, not on GitHub
+PROGRESS.txt
