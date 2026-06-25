@@ -1,6 +1,6 @@
 fastapi[standard]
 motor
 pydantic[email]
-passlib[bcrypt]
+bcrypt
 python-jose[cryptography]
 python-dotenv
