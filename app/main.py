@@ -2,12 +2,18 @@ from contextlib import asynccontextmanager
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pymongo.errors import DuplicateKeyError
 
 from app.database import db
-from app.schemas import UserCreate, UserOut
-from app.security import hash_password
+from app.schemas import UserCreate, UserOut, LoginRequest, Token
+from app.security import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    decode_access_token,
+)
 
 
 # Code that runs ONCE when the server starts (and shuts down).
@@ -29,6 +35,56 @@ async def lifespan(app: FastAPI):
 
 # Hand the lifespan function to FastAPI so it knows to run it.
 app = FastAPI(lifespan=lifespan)
+
+
+# Tells FastAPI to look for an "Authorization: Bearer <token>" header.
+# It also adds the "Authorize" button to the /docs page so you can paste
+# a token there and test protected routes. If the header is missing,
+# FastAPI rejects the request itself ("Not authenticated") before our
+# code even runs.
+bearer_scheme = HTTPBearer()
+
+
+# A "dependency": a function FastAPI runs BEFORE a protected route. Any
+# route that lists `Depends(get_current_user)` will only run if this
+# returns successfully — otherwise the 401 below stops the request here.
+# Returns the logged-in user, so the route gets it for free.
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> UserOut:
+    # We use the same 401 for every failure so we never hint WHY a token
+    # was rejected. WWW-Authenticate is the standard header that names the
+    # auth scheme on a 401.
+    invalid = HTTPException(
+        status_code=401,
+        detail="Could not validate your login token.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    # credentials.credentials is just the token string after "Bearer ".
+    # Verify it and pull out the user id (or None if it's bad/expired).
+    user_id = decode_access_token(credentials.credentials)
+    if user_id is None:
+        raise invalid
+
+    # The id inside the token should be a valid ObjectId shape. If someone
+    # somehow forged a token with junk in "sub", this guards against it.
+    try:
+        object_id = ObjectId(user_id)
+    except InvalidId:
+        raise invalid
+
+    # The user could have been deleted after the token was issued, so we
+    # always confirm they still exist.
+    document = await db["users"].find_one({"_id": object_id})
+    if document is None:
+        raise invalid
+
+    return UserOut(
+        id=str(document["_id"]),
+        username=document["username"],
+        email=document["email"],
+    )
 
 
 @app.get("/")
@@ -105,6 +161,20 @@ async def list_users():
     return users
 
 
+# Who am I? A PROTECTED route: it requires a valid token.
+# Depends(get_current_user) runs our dependency first; if the token is bad
+# the request never reaches this function. If it's good, FastAPI hands us
+# the logged-in user as `current_user`, and we just return it.
+#
+# ROUTE ORDER MATTERS: this must come BEFORE "/users/{user_id}" below.
+# FastAPI checks routes top to bottom. If "/users/{user_id}" came first,
+# a request to "/users/me" would match it with user_id="me" and try to
+# look up a user with that id. Specific paths go above wildcard ones.
+@app.get("/users/me", response_model=UserOut)
+async def read_current_user(current_user: UserOut = Depends(get_current_user)):
+    return current_user
+
+
 # Read ONE user by their id.
 # {user_id} in the path is a "path parameter": FastAPI grabs that piece of
 # the URL and hands it to us as the user_id argument (a string).
@@ -132,3 +202,34 @@ async def get_user(user_id: str):
         username=document["username"],
         email=document["email"],
     )
+
+
+# Log in: check email + password, and hand back a signed token on success.
+# response_model=Token shapes the reply into {access_token, token_type}.
+@app.post("/login", response_model=Token)
+async def login(credentials: LoginRequest):
+    # Find the user with this email. find_one returns the document or None.
+    document = await db["users"].find_one({"email": credentials.email})
+
+    # SECURITY: we deliberately give the SAME error whether the email
+    # doesn't exist OR the password is wrong. If we said "no such email"
+    # vs "wrong password", an attacker could probe which emails are
+    # registered. One vague 401 reveals nothing.
+    #
+    # Python's "or" short-circuits: if document is None we never call
+    # verify_password (which would crash on a missing user).
+    if document is None or not verify_password(
+        credentials.password, document["hashed_password"]
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password.",
+        )
+
+    # Good login. Mint a token whose "subject" is this user's id (as a
+    # string). That id is how a later request will prove who it is.
+    token = create_access_token(str(document["_id"]))
+
+    # token_type defaults to "bearer" in the Token schema, so we only
+    # need to pass the token string itself.
+    return Token(access_token=token)

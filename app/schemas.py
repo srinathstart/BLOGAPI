@@ -16,3 +16,19 @@ class UserOut(BaseModel):
     id: str
     username: str
     email: EmailStr
+
+
+# What the client sends to log in (the "input" shape for /login).
+# Just the two things needed to prove who they are.
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+# What WE send back after a successful login (the "output" shape).
+# - access_token: the signed JWT string the client will store and reuse.
+# - token_type: "bearer" is the standard label that tells the client how
+#   to send it back later: in a header "Authorization: Bearer <token>".
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
