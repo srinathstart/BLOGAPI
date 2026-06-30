@@ -65,3 +65,23 @@ class PostOut(BaseModel):
 class PostUpdate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(min_length=1)
+
+
+# What the CLIENT sends us to add a comment (the "input" shape).
+# Only the comment text. NOT post_id (that comes from the URL) and NOT
+# author_id (that comes from the login token) — the client never chooses
+# which post a comment lands on or who wrote it.
+class CommentCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+
+# What WE send back (the "output" shape).
+# - post_id: which post this comment belongs to (the "relationship" link).
+# - author_id: which user wrote it (filled from the token).
+# - created_at: when, in UTC (used to sort comments oldest-first).
+class CommentOut(BaseModel):
+    id: str
+    post_id: str
+    content: str
+    author_id: str
+    created_at: datetime

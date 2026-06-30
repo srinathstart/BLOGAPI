@@ -16,6 +16,8 @@ from app.schemas import (
     PostCreate,
     PostOut,
     PostUpdate,
+    CommentCreate,
+    CommentOut,
 )
 from app.security import (
     hash_password,
@@ -415,3 +417,96 @@ async def delete_post(
     await db["posts"].delete_one({"_id": object_id})
 
     # No return: a 204 response has an empty body by definition.
+
+
+# Add a comment to a post. PROTECTED (any logged-in user may comment).
+# The URL is NESTED: /posts/{post_id}/comments reads as "the comments that
+# belong to this post". The comment links to TWO things, neither from the
+# body: post_id (from the URL) and author_id (from the token).
+@app.post(
+    "/posts/{post_id}/comments",
+    response_model=CommentOut,
+    status_code=201,
+)
+async def create_comment(
+    post_id: str,
+    new_comment: CommentCreate,
+    current_user: UserOut = Depends(get_current_user),
+):
+    # Same id round-trip: a junk post id -> 400.
+    try:
+        object_id = ObjectId(post_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid post id.")
+
+    # The post must EXIST before we can attach a comment to it. Without this
+    # check we'd happily store comments pointing at a post that isn't there
+    # ("orphan" comments). Valid-shaped id but no such post -> 404.
+    post = await db["posts"].find_one({"_id": object_id})
+    if post is None:
+        raise HTTPException(status_code=404, detail="No post found with that id.")
+
+    # Note: we do NOT do an ownership check here. Commenting is open to ANY
+    # logged-in user — you comment on OTHER people's posts, that's the point.
+    # (Editing/deleting a post stayed author-only; commenting is not.)
+
+    created_at = datetime.now(timezone.utc)
+
+    # Build the comment. post_id is the string from the URL (the link to the
+    # parent post); author_id is the logged-in user; both stamped by us.
+    comment_document = {
+        "post_id": post_id,
+        "content": new_comment.content,
+        "author_id": current_user.id,
+        "created_at": created_at,
+    }
+
+    # First write auto-creates the "comments" collection.
+    result = await db["comments"].insert_one(comment_document)
+
+    return CommentOut(
+        id=str(result.inserted_id),
+        post_id=post_id,
+        content=new_comment.content,
+        author_id=current_user.id,
+        created_at=created_at,
+    )
+
+
+# List all comments on a post. PUBLIC: anyone can read the discussion.
+@app.get("/posts/{post_id}/comments", response_model=list[CommentOut])
+async def list_comments(post_id: str):
+    # Junk post id -> 400.
+    try:
+        object_id = ObjectId(post_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid post id.")
+
+    # Same as creating: the post must exist. Asking for the comments of a
+    # post that isn't there -> 404 (rather than a silent empty list, which
+    # would hide the fact that the post itself is missing).
+    post = await db["posts"].find_one({"_id": object_id})
+    if post is None:
+        raise HTTPException(status_code=404, detail="No post found with that id.")
+
+    comments = []
+
+    # THE RELATIONSHIP QUERY: find only the comments whose post_id matches
+    # THIS post. The filter {"post_id": post_id} is how we "follow the link"
+    # from a post to its comments. .sort("created_at", 1) = OLDEST first, so
+    # the discussion reads top-to-bottom like a conversation (the opposite of
+    # posts, which we showed newest-first).
+    async for document in db["comments"].find({"post_id": post_id}).sort(
+        "created_at", 1
+    ):
+        comments.append(
+            CommentOut(
+                id=str(document["_id"]),
+                post_id=document["post_id"],
+                content=document["content"],
+                author_id=document["author_id"],
+                created_at=document["created_at"],
+            )
+        )
+
+    return comments
