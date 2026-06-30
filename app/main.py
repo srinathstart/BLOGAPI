@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -7,7 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pymongo.errors import DuplicateKeyError
 
 from app.database import db
-from app.schemas import UserCreate, UserOut, LoginRequest, Token
+from app.schemas import UserCreate, UserOut, LoginRequest, Token, PostCreate, PostOut
 from app.security import (
     hash_password,
     verify_password,
@@ -233,3 +234,88 @@ async def login(credentials: LoginRequest):
     # token_type defaults to "bearer" in the Token schema, so we only
     # need to pass the token string itself.
     return Token(access_token=token)
+
+
+# Create a new blog post. PROTECTED: requires a valid login token.
+# - Depends(get_current_user) runs first; no/invalid token -> 401 and this
+#   function never runs. On success, FastAPI hands us the logged-in user.
+# - new_post (the request body) carries ONLY title + content. The author is
+#   NOT trusted from the client — we take it from current_user.id, which
+#   came from the verified token. That's how a post becomes "owned".
+@app.post("/posts", response_model=PostOut, status_code=201)
+async def create_post(
+    new_post: PostCreate,
+    current_user: UserOut = Depends(get_current_user),
+):
+    # The exact moment the post is created, in UTC. We compute it once and
+    # reuse the same value for both the DB write and the response, so they
+    # can never disagree.
+    created_at = datetime.now(timezone.utc)
+
+    # Build the document we'll save. author_id is the STRING id of the
+    # logged-in user — stamped by us, not the client.
+    post_document = {
+        "title": new_post.title,
+        "content": new_post.content,
+        "author_id": current_user.id,
+        "created_at": created_at,
+    }
+
+    # Insert into the "posts" collection (Mongo creates it on first write).
+    result = await db["posts"].insert_one(post_document)
+
+    # Shape the reply. The new _id becomes our string id.
+    return PostOut(
+        id=str(result.inserted_id),
+        title=new_post.title,
+        content=new_post.content,
+        author_id=current_user.id,
+        created_at=created_at,
+    )
+
+
+# Read ALL posts. PUBLIC: no token needed — anyone can read the blog.
+# response_model=list[PostOut] forces every item through the safe shape.
+@app.get("/posts", response_model=list[PostOut])
+async def list_posts():
+    posts = []
+
+    # find() with no filter = every post. The cursor is async, so we walk
+    # it with "async for". .sort("created_at", -1) returns NEWEST first
+    # (-1 = descending); that's why we stored created_at.
+    async for document in db["posts"].find().sort("created_at", -1):
+        posts.append(
+            PostOut(
+                id=str(document["_id"]),
+                title=document["title"],
+                content=document["content"],
+                author_id=document["author_id"],
+                created_at=document["created_at"],
+            )
+        )
+
+    return posts
+
+
+# Read ONE post by its id. PUBLIC.
+# Same id round-trip + error pattern as GET /users/{user_id}:
+# bad id shape -> 400, valid shape but no match -> 404.
+@app.get("/posts/{post_id}", response_model=PostOut)
+async def get_post(post_id: str):
+    try:
+        object_id = ObjectId(post_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid post id.")
+
+    document = await db["posts"].find_one({"_id": object_id})
+
+    if document is None:
+        raise HTTPException(status_code=404, detail="No post found with that id.")
+
+    return PostOut(
+        id=str(document["_id"]),
+        title=document["title"],
+        content=document["content"],
+        author_id=document["author_id"],
+        created_at=document["created_at"],
+    )

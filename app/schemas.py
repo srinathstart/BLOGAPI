@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -32,3 +34,24 @@ class LoginRequest(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# What the CLIENT sends us to create a post (the "input" shape).
+# Notice: there is NO author_id here. We do NOT let the client say who
+# wrote the post — if we did, anyone could post as anyone else. The author
+# is taken from the login token instead (see POST /posts in main.py).
+class PostCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
+
+
+# What WE send back to the client (the "output" shape).
+# - author_id: the id of the user who created it (filled in from the token).
+# - created_at: when it was written, in UTC. Useful later for sorting
+#   posts newest-first.
+class PostOut(BaseModel):
+    id: str
+    title: str
+    content: str
+    author_id: str
+    created_at: datetime
