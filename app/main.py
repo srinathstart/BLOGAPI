@@ -8,7 +8,15 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pymongo.errors import DuplicateKeyError
 
 from app.database import db
-from app.schemas import UserCreate, UserOut, LoginRequest, Token, PostCreate, PostOut
+from app.schemas import (
+    UserCreate,
+    UserOut,
+    LoginRequest,
+    Token,
+    PostCreate,
+    PostOut,
+    PostUpdate,
+)
 from app.security import (
     hash_password,
     verify_password,
@@ -319,3 +327,91 @@ async def get_post(post_id: str):
         author_id=document["author_id"],
         created_at=document["created_at"],
     )
+
+
+# Edit a post. PROTECTED + AUTHOR-ONLY.
+# - Depends(get_current_user): no/invalid token -> 401, route skipped.
+# - updated_post (the body) carries a fresh title + content that REPLACE
+#   the old ones. author_id and created_at are never touched.
+# This route shows the three different "no" answers in one place:
+#   400 = the id is junk, 404 = no such post, 403 = it's not YOUR post.
+@app.put("/posts/{post_id}", response_model=PostOut)
+async def update_post(
+    post_id: str,
+    updated_post: PostUpdate,
+    current_user: UserOut = Depends(get_current_user),
+):
+    # Same id round-trip as the read route: bad shape -> 400.
+    try:
+        object_id = ObjectId(post_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid post id.")
+
+    # The post must exist before we can talk about who owns it.
+    document = await db["posts"].find_one({"_id": object_id})
+    if document is None:
+        raise HTTPException(status_code=404, detail="No post found with that id.")
+
+    # THE OWNERSHIP CHECK. The post's author_id was stamped from a token at
+    # creation; current_user.id comes from THIS request's token. If they
+    # differ, the caller is logged in but editing someone else's post -> 403.
+    # 403 (Forbidden) is different from 401 (not logged in): here we DO know
+    # who you are, you're just not allowed to touch this one.
+    if document["author_id"] != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only edit your own posts.",
+        )
+
+    # Apply the change. $set updates ONLY these two fields and leaves the
+    # rest of the document (author_id, created_at) exactly as it was.
+    await db["posts"].update_one(
+        {"_id": object_id},
+        {"$set": {"title": updated_post.title, "content": updated_post.content}},
+    )
+
+    # Return the post as it now stands. The new title/content come from the
+    # request; author_id and created_at come from the document we already
+    # fetched (they didn't change).
+    return PostOut(
+        id=str(document["_id"]),
+        title=updated_post.title,
+        content=updated_post.content,
+        author_id=document["author_id"],
+        created_at=document["created_at"],
+    )
+
+
+# Delete a post. PROTECTED + AUTHOR-ONLY.
+# Same guard rails as editing (400 junk id / 404 missing / 403 not yours),
+# because the rule is identical: you can only remove your OWN post.
+# - status_code=204 ("No Content") is the standard reply for a successful
+#   delete: it means "done, and there's nothing to send back". So this
+#   function returns nothing, and there's no response_model.
+@app.delete("/posts/{post_id}", status_code=204)
+async def delete_post(
+    post_id: str,
+    current_user: UserOut = Depends(get_current_user),
+):
+    # id junk -> 400.
+    try:
+        object_id = ObjectId(post_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid post id.")
+
+    # Must exist before we can own-check it -> 404 if not.
+    document = await db["posts"].find_one({"_id": object_id})
+    if document is None:
+        raise HTTPException(status_code=404, detail="No post found with that id.")
+
+    # The same ownership check as update: not yours -> 403.
+    if document["author_id"] != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete your own posts.",
+        )
+
+    # Actually remove it. We already confirmed it exists and is ours.
+    await db["posts"].delete_one({"_id": object_id})
+
+    # No return: a 204 response has an empty body by definition.

@@ -55,3 +55,13 @@ class PostOut(BaseModel):
     content: str
     author_id: str
     created_at: datetime
+
+
+# What the CLIENT sends us to EDIT an existing post (the "input" shape).
+# Same fields and rules as creating: a fresh title + content that REPLACE
+# the old ones. Like PostCreate, there is NO author_id (the author never
+# changes and is never client-controlled) and NO id (that's in the URL).
+# It's a separate class from PostCreate so the two can diverge later.
+class PostUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
