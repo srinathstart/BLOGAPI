@@ -16,6 +16,7 @@ from app.schemas import (
     PostCreate,
     PostOut,
     PostUpdate,
+    PostPatch,
     CommentCreate,
     CommentOut,
 )
@@ -381,6 +382,78 @@ async def update_post(
         content=updated_post.content,
         author_id=document["author_id"],
         created_at=document["created_at"],
+    )
+
+
+# Partially edit a post. PROTECTED + AUTHOR-ONLY.
+# PATCH is the "change only the fields I name" verb, in contrast to Day 7's
+# PUT which replaced the WHOLE post. The guard rails are IDENTICAL to PUT
+# (400 junk id / 404 missing / 403 not yours) — only the update step differs.
+@app.patch("/posts/{post_id}", response_model=PostOut)
+async def patch_post(
+    post_id: str,
+    changes: PostPatch,
+    current_user: UserOut = Depends(get_current_user),
+):
+    # id junk -> 400 (the same ObjectId round-trip as every other route).
+    try:
+        object_id = ObjectId(post_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid post id.")
+
+    # Must exist before we can own-check it -> 404.
+    document = await db["posts"].find_one({"_id": object_id})
+    if document is None:
+        raise HTTPException(status_code=404, detail="No post found with that id.")
+
+    # The same ownership check as PUT/DELETE: not yours -> 403.
+    if document["author_id"] != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only edit your own posts.",
+        )
+
+    # THE HEART OF PATCH. exclude_unset=True gives us ONLY the fields the
+    # client actually sent, dropping any they left out. So a body of just
+    # {"title": "New"} yields {"title": "New"} and content is never touched.
+    # (PostUpdate/PUT could never do this — it always carries BOTH fields.)
+    #
+    # The "if value is not None" is a safety net: title/content must be real
+    # strings, so we refuse to write a null over them even if a client
+    # explicitly sends {"title": null}. Such a field is simply ignored.
+    fields_to_update = {
+        key: value
+        for key, value in changes.model_dump(exclude_unset=True).items()
+        if value is not None
+    }
+
+    # If nothing survived (empty body, or only nulls), there's nothing to do.
+    # An empty $set would actually make MongoDB raise an error, so we stop
+    # early with a clear 400 instead of letting that happen.
+    if not fields_to_update:
+        raise HTTPException(
+            status_code=400,
+            detail="Send at least one field (title or content) to update.",
+        )
+
+    # $set updates ONLY the named fields; author_id and created_at are left
+    # exactly as they were — same as PUT.
+    await db["posts"].update_one(
+        {"_id": object_id},
+        {"$set": fields_to_update},
+    )
+
+    # Return the post as it now stands, WITHOUT a second DB read. We already
+    # hold the OLD document; {**document, **fields_to_update} means "start
+    # from the old doc, then overwrite with whatever changed". The result
+    # matches what's now in the database.
+    merged = {**document, **fields_to_update}
+    return PostOut(
+        id=str(merged["_id"]),
+        title=merged["title"],
+        content=merged["content"],
+        author_id=merged["author_id"],
+        created_at=merged["created_at"],
     )
 
 

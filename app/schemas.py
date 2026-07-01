@@ -67,6 +67,22 @@ class PostUpdate(BaseModel):
     content: str = Field(min_length=1)
 
 
+# What the CLIENT sends us to PARTIALLY edit a post (the "input" shape).
+# The contrast with PostUpdate (PUT) IS the whole lesson:
+#   - PUT replaces the WHOLE post, so title AND content are both required.
+#   - PATCH changes only the fields you name, so BOTH are now OPTIONAL.
+# "str | None = None" is what makes a field optional: the "= None" default
+# means "if the client leaves this out, fill in None". We'll later treat a
+# left-out field as "don't touch it".
+# The Field rules (min/max length) still apply, but ONLY when a real value is
+# given — a missing field is None, so validation is skipped for it. That's
+# why we can't accidentally save an empty title: if it's present, it must be
+# 1..200 chars; if it's absent, it isn't changed at all.
+class PostPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    content: str | None = Field(default=None, min_length=1)
+
+
 # What the CLIENT sends us to add a comment (the "input" shape).
 # Only the comment text. NOT post_id (that comes from the URL) and NOT
 # author_id (that comes from the login token) — the client never chooses
