@@ -19,6 +19,7 @@ from app.schemas import (
     PostPatch,
     CommentCreate,
     CommentOut,
+    CommentUpdate,
 )
 from app.security import (
     hash_password,
@@ -583,3 +584,117 @@ async def list_comments(post_id: str):
         )
 
     return comments
+
+
+# Edit a comment. PROTECTED + AUTHOR-ONLY.
+# This is the SAME ownership story as editing a POST (Day 7), now applied to
+# comments. The contrast with Day 8 is the lesson: CREATING a comment needs no
+# ownership check (you comment on other people's posts), but CHANGING one does
+# — you may only edit YOUR OWN comment.
+# The URL carries TWO ids: {post_id} (which post) and {comment_id} (which
+# comment under it). We validate and use both.
+@app.put(
+    "/posts/{post_id}/comments/{comment_id}",
+    response_model=CommentOut,
+)
+async def update_comment(
+    post_id: str,
+    comment_id: str,
+    updated_comment: CommentUpdate,
+    current_user: UserOut = Depends(get_current_user),
+):
+    # Both ids in the URL must be valid ObjectId shapes; junk -> 400. We check
+    # each separately so the error names which part of the URL was malformed.
+    try:
+        ObjectId(post_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid post id.")
+
+    try:
+        comment_object_id = ObjectId(comment_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid comment id.")
+
+    # Look the comment up by BOTH its own id AND the post it must belong to.
+    # Folding post_id into the filter answers "does this comment actually live
+    # under THIS post?" for free: a comment from a different post simply won't
+    # match, so a mismatched (or missing) comment -> 404. This is the
+    # nested-resource integrity check — it stops post B's URL from touching
+    # post A's comment. (post_id is stored as a string, so we match the string.)
+    comment = await db["comments"].find_one(
+        {"_id": comment_object_id, "post_id": post_id}
+    )
+    if comment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No comment found on that post with that id.",
+        )
+
+    # THE OWNERSHIP CHECK, same as posts: not yours -> 403. We know who you
+    # are (you're logged in), you're just not allowed to edit THIS comment.
+    if comment["author_id"] != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only edit your own comments.",
+        )
+
+    # $set only the content; post_id, author_id and created_at stay untouched.
+    await db["comments"].update_one(
+        {"_id": comment_object_id},
+        {"$set": {"content": updated_comment.content}},
+    )
+
+    # Return the comment as it now stands. The new content comes from the
+    # request; the rest comes from the doc we already fetched (no 2nd read).
+    return CommentOut(
+        id=str(comment["_id"]),
+        post_id=comment["post_id"],
+        content=updated_comment.content,
+        author_id=comment["author_id"],
+        created_at=comment["created_at"],
+    )
+
+
+# Delete a comment. PROTECTED + AUTHOR-ONLY.
+# Same guard rails and ownership rule as editing a comment (400 junk id /
+# 404 missing-or-wrong-post / 403 not yours), then remove it. 204 No Content
+# = success with an empty body, so there's no return and no response_model.
+@app.delete("/posts/{post_id}/comments/{comment_id}", status_code=204)
+async def delete_comment(
+    post_id: str,
+    comment_id: str,
+    current_user: UserOut = Depends(get_current_user),
+):
+    # Both ids must be valid ObjectId shapes; junk -> 400.
+    try:
+        ObjectId(post_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid post id.")
+
+    try:
+        comment_object_id = ObjectId(comment_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid comment id.")
+
+    # Same combined lookup as editing: the comment must exist AND belong to
+    # the post in the URL, or it's a 404.
+    comment = await db["comments"].find_one(
+        {"_id": comment_object_id, "post_id": post_id}
+    )
+    if comment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No comment found on that post with that id.",
+        )
+
+    # Not yours -> 403 (same ownership check as editing).
+    if comment["author_id"] != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete your own comments.",
+        )
+
+    # Confirmed it exists, belongs to this post, and is ours — remove it.
+    await db["comments"].delete_one({"_id": comment_object_id})
+
+    # No return: a 204 response has an empty body by definition.

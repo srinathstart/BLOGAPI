@@ -101,3 +101,12 @@ class CommentOut(BaseModel):
     content: str
     author_id: str
     created_at: datetime
+
+
+# What the CLIENT sends us to EDIT a comment (the "input" shape).
+# Only the text can change. post_id (which post it's on) and author_id (who
+# wrote it) are never client-controlled and never change — just like a post's
+# author never changes. Same content rule as CommentCreate. This is a
+# full-replace (PUT) edit, mirroring PostUpdate for posts.
+class CommentUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
