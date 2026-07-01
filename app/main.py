@@ -217,6 +217,50 @@ async def get_user(user_id: str):
     )
 
 
+# List every post written by ONE user. PUBLIC (anyone can browse an author).
+# The URL is NESTED under the user — /users/{user_id}/posts reads as "the
+# posts that belong to this user" — the same shape as /posts/{id}/comments.
+# This is the FLIP SIDE of ownership: we STAMPED author_id when a post was
+# created (Day 6); now we FOLLOW that link the other way to gather every post
+# with a given author_id.
+@app.get("/users/{user_id}/posts", response_model=list[PostOut])
+async def list_user_posts(user_id: str):
+    # Same id round-trip as the other {user_id} routes: junk shape -> 400.
+    try:
+        object_id = ObjectId(user_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="That is not a valid user id.")
+
+    # The user must EXIST first. Asking for the posts of a user who isn't
+    # there -> 404 (rather than a silent empty list, which would hide the fact
+    # that the USER is missing). Same choice we made for a post's comments.
+    user = await db["users"].find_one({"_id": object_id})
+    if user is None:
+        raise HTTPException(status_code=404, detail="No user found with that id.")
+
+    posts = []
+
+    # THE RELATIONSHIP QUERY. Careful: author_id was stored as the user's
+    # STRING id when each post was created (author_id = current_user.id, a
+    # str), so we filter by the string user_id — NOT object_id. Matching the
+    # ObjectId here would find nothing. .sort("created_at", -1) = newest
+    # first, exactly like GET /posts.
+    async for document in db["posts"].find({"author_id": user_id}).sort(
+        "created_at", -1
+    ):
+        posts.append(
+            PostOut(
+                id=str(document["_id"]),
+                title=document["title"],
+                content=document["content"],
+                author_id=document["author_id"],
+                created_at=document["created_at"],
+            )
+        )
+
+    return posts
+
+
 # Log in: check email + password, and hand back a signed token on success.
 # response_model=Token shapes the reply into {access_token, token_type}.
 @app.post("/login", response_model=Token)
