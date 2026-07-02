@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pymongo.errors import DuplicateKeyError
 
@@ -154,11 +154,16 @@ async def create_user(new_user: UserCreate):
 # item through the safe UserOut shape (so no hashed_password leaks out).
 @app.get("/users", response_model=list[UserOut])
 async def list_users(
+    response: Response,
     # Same pagination pattern as GET /posts (Day 12): skip = offset (>=0),
     # limit = page size (1..100). Out-of-bounds -> 422 before we run.
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=10, ge=1, le=100),
 ):
+    # Total count for the header (filter {} = all users), same as GET /posts.
+    total = await db["users"].count_documents({})
+    response.headers["X-Total-Count"] = str(total)
+
     # We'll collect the cleaned-up users here.
     users = []
 
@@ -231,6 +236,7 @@ async def get_user(user_id: str):
 @app.get("/users/{user_id}/posts", response_model=list[PostOut])
 async def list_user_posts(
     user_id: str,
+    response: Response,
     # Same skip/limit page window as GET /posts. Note user_id is a PATH param
     # (in the route string); skip/limit are QUERY params (not in the path).
     skip: int = Query(default=0, ge=0),
@@ -248,6 +254,10 @@ async def list_user_posts(
     user = await db["users"].find_one({"_id": object_id})
     if user is None:
         raise HTTPException(status_code=404, detail="No user found with that id.")
+
+    # Total = how many posts this user has (SAME filter as the find below).
+    total = await db["posts"].count_documents({"author_id": user_id})
+    response.headers["X-Total-Count"] = str(total)
 
     posts = []
 
@@ -361,9 +371,22 @@ async def create_post(
 # exactly like a bad request body.
 @app.get("/posts", response_model=list[PostOut])
 async def list_posts(
+    # `response: Response` is a special parameter FastAPI fills in for us:
+    # it's the outgoing reply, which we can reach into to set a header.
+    # It has NO default, and Python forbids a no-default arg AFTER a default
+    # one, so it must come BEFORE skip/limit. FastAPI doesn't treat it as a
+    # query/body field — it just hands us the response object.
+    response: Response,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=10, ge=1, le=100),
 ):
+    # HOW MANY posts match in TOTAL (ignoring skip/limit). count_documents
+    # takes the SAME filter as the find below — here {} = "all posts" — so the
+    # count always agrees with what we're paging. The client divides this by
+    # `limit` to know how many pages exist. Headers are strings, so str(...).
+    total = await db["posts"].count_documents({})
+    response.headers["X-Total-Count"] = str(total)
+
     posts = []
 
     # find() with no filter = every post, but we no longer walk them all.
@@ -632,6 +655,7 @@ async def create_comment(
 @app.get("/posts/{post_id}/comments", response_model=list[CommentOut])
 async def list_comments(
     post_id: str,
+    response: Response,
     # Same skip/limit page window. Comments are OLDEST-first (conversation
     # order), so page 2 continues further DOWN the thread.
     skip: int = Query(default=0, ge=0),
@@ -649,6 +673,10 @@ async def list_comments(
     post = await db["posts"].find_one({"_id": object_id})
     if post is None:
         raise HTTPException(status_code=404, detail="No post found with that id.")
+
+    # Total = how many comments this post has (SAME filter as the find below).
+    total = await db["comments"].count_documents({"post_id": post_id})
+    response.headers["X-Total-Count"] = str(total)
 
     comments = []
 
