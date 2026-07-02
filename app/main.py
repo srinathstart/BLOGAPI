@@ -153,14 +153,19 @@ async def create_user(new_user: UserCreate):
 # response_model=list[UserOut] means: send a JSON list, and force every
 # item through the safe UserOut shape (so no hashed_password leaks out).
 @app.get("/users", response_model=list[UserOut])
-async def list_users():
+async def list_users(
+    # Same pagination pattern as GET /posts (Day 12): skip = offset (>=0),
+    # limit = page size (1..100). Out-of-bounds -> 422 before we run.
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=100),
+):
     # We'll collect the cleaned-up users here.
     users = []
 
-    # db["users"].find() with no filter means "every document".
-    # It returns a cursor; "async for" walks through the results one by one,
-    # awaiting the database as needed.
-    async for document in db["users"].find():
+    # db["users"].find() with no filter means "every document". We no longer
+    # walk them all: .skip(skip) jumps the offset, .limit(limit) caps the page.
+    # (No .sort() here — users have no created_at; insertion order is fine.)
+    async for document in db["users"].find().skip(skip).limit(limit):
         # Each document has an ObjectId _id; convert it to a string id,
         # and pull only the safe fields into UserOut.
         users.append(
@@ -224,7 +229,13 @@ async def get_user(user_id: str):
 # created (Day 6); now we FOLLOW that link the other way to gather every post
 # with a given author_id.
 @app.get("/users/{user_id}/posts", response_model=list[PostOut])
-async def list_user_posts(user_id: str):
+async def list_user_posts(
+    user_id: str,
+    # Same skip/limit page window as GET /posts. Note user_id is a PATH param
+    # (in the route string); skip/limit are QUERY params (not in the path).
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=100),
+):
     # Same id round-trip as the other {user_id} routes: junk shape -> 400.
     try:
         object_id = ObjectId(user_id)
@@ -245,8 +256,12 @@ async def list_user_posts(user_id: str):
     # str), so we filter by the string user_id — NOT object_id. Matching the
     # ObjectId here would find nothing. .sort("created_at", -1) = newest
     # first, exactly like GET /posts.
-    async for document in db["posts"].find({"author_id": user_id}).sort(
-        "created_at", -1
+    async for document in (
+        db["posts"]
+        .find({"author_id": user_id})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
     ):
         posts.append(
             PostOut(
@@ -615,7 +630,13 @@ async def create_comment(
 
 # List all comments on a post. PUBLIC: anyone can read the discussion.
 @app.get("/posts/{post_id}/comments", response_model=list[CommentOut])
-async def list_comments(post_id: str):
+async def list_comments(
+    post_id: str,
+    # Same skip/limit page window. Comments are OLDEST-first (conversation
+    # order), so page 2 continues further DOWN the thread.
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=100),
+):
     # Junk post id -> 400.
     try:
         object_id = ObjectId(post_id)
@@ -636,8 +657,12 @@ async def list_comments(post_id: str):
     # from a post to its comments. .sort("created_at", 1) = OLDEST first, so
     # the discussion reads top-to-bottom like a conversation (the opposite of
     # posts, which we showed newest-first).
-    async for document in db["comments"].find({"post_id": post_id}).sort(
-        "created_at", 1
+    async for document in (
+        db["comments"]
+        .find({"post_id": post_id})
+        .sort("created_at", 1)
+        .skip(skip)
+        .limit(limit)
     ):
         comments.append(
             CommentOut(
