@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pymongo.errors import DuplicateKeyError
 
@@ -330,16 +330,38 @@ async def create_post(
     )
 
 
-# Read ALL posts. PUBLIC: no token needed — anyone can read the blog.
+# Read posts, ONE PAGE at a time. PUBLIC: no token needed.
 # response_model=list[PostOut] forces every item through the safe shape.
+#
+# skip + limit are QUERY parameters (the ?skip=0&limit=10 on the URL), not
+# path parameters. FastAPI knows they're query params because they're plain
+# function arguments that AREN'T part of the route path "/posts".
+# - Query(...) lets us attach a default AND validation rules to each one:
+#   * skip: ge=0  -> "greater-or-equal to 0", so a negative offset is rejected
+#     (default 0 = start at the very first post).
+#   * limit: ge=1 -> ask for at least one; le=100 -> never more than 100 in a
+#     single page, so a client can't request the whole table at once
+#     (default 10 = a sensible page size).
+# A value outside these bounds -> FastAPI returns 422 before our code runs,
+# exactly like a bad request body.
 @app.get("/posts", response_model=list[PostOut])
-async def list_posts():
+async def list_posts(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=100),
+):
     posts = []
 
-    # find() with no filter = every post. The cursor is async, so we walk
-    # it with "async for". .sort("created_at", -1) returns NEWEST first
-    # (-1 = descending); that's why we stored created_at.
-    async for document in db["posts"].find().sort("created_at", -1):
+    # find() with no filter = every post, but we no longer walk them all.
+    # .sort("created_at", -1) still orders NEWEST first, THEN:
+    #   .skip(skip)   jumps over the first `skip` posts (the offset)
+    #   .limit(limit) stops after `limit` posts (the page size)
+    # ORDER MATTERS: sort before skip/limit, so "page 2" means the next 10
+    # newest posts — not a random 10. Mongo applies them in this order
+    # regardless of how we chain them, but reading sort->skip->limit keeps
+    # the intent obvious.
+    async for document in (
+        db["posts"].find().sort("created_at", -1).skip(skip).limit(limit)
+    ):
         posts.append(
             PostOut(
                 id=str(document["_id"]),
