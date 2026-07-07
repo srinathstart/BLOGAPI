@@ -43,6 +43,21 @@ async def lifespan(app: FastAPI):
     # exists, MongoDB just leaves it as-is.
     await db["users"].create_index("email", unique=True)
 
+    # PERFORMANCE INDEXES. Without these, the queries below do a "collection
+    # scan" — Mongo reads EVERY document to find matches. An index is a
+    # pre-sorted lookup structure so Mongo jumps straight to the matches.
+    # These are NOT unique (many posts share an author, many comments share a
+    # post), so no unique=True. Like the email index, create_index is safe to
+    # call every startup — if it already exists, Mongo leaves it as-is.
+    #
+    # - posts.author_id  -> GET /users/{id}/posts (find by author_id)
+    # - comments.post_id -> GET /posts/{id}/comments (find by post_id)
+    # - posts.created_at -> the newest-first sort on GET /posts (sorting on an
+    #   indexed field avoids sorting the whole collection in memory)
+    await db["posts"].create_index("author_id")
+    await db["comments"].create_index("post_id")
+    await db["posts"].create_index("created_at")
+
     # Everything before "yield" runs at startup; everything after it runs
     # at shutdown. We have no cleanup to do yet, so there's nothing below.
     yield
