@@ -4,7 +4,7 @@
 
 import asyncio
 
-import app.main as main_module
+import app.database as database
 
 
 def indexed_fields(info):
@@ -15,11 +15,11 @@ def indexed_fields(info):
 
 
 def test_startup_creates_all_indexes(client):
-    # `client` already ran the lifespan; main_module.db is the fake DB with the
-    # indexes on it. index_information() is async, so run it to completion.
-    users = asyncio.run(main_module.db["users"].index_information())
-    posts = asyncio.run(main_module.db["posts"].index_information())
-    comments = asyncio.run(main_module.db["comments"].index_information())
+    # `client` already ran the lifespan; database.db is the fake DB (patched by
+    # the fixture) with the indexes on it. index_information() is async.
+    users = asyncio.run(database.db["users"].index_information())
+    posts = asyncio.run(database.db["posts"].index_information())
+    comments = asyncio.run(database.db["comments"].index_information())
 
     # The original unique email index (Day 4) is still there.
     assert "email" in indexed_fields(users)

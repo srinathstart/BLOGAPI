@@ -7,8 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 from mongomock_motor import AsyncMongoMockClient
 
-# Import the MODULE (not just `app`) so we can reach into it and swap out its
-# `db` global for a fake one before any request runs.
+# Import the database module (whose `db` attribute every router + the lifespan
+# read at call time) and the app itself.
+import app.database as database_module
 import app.main as main_module
 
 
@@ -24,11 +25,11 @@ def client(monkeypatch):
     # name, just like the real code does.
     mock_db = AsyncMongoMockClient()["blogapi_test"]
 
-    # THE SWAP. main.py does `from app.database import db` and then uses `db`
-    # as a module global inside every route and the lifespan. monkeypatch
-    # rebinds that global to our fake for the duration of ONE test, then undoes
-    # it automatically afterward. So the app talks to the fake DB, unaware.
-    monkeypatch.setattr(main_module, "db", mock_db)
+    # THE SWAP. Every router and the lifespan read the DB as `database.db`
+    # (resolved at call time), so patching this ONE attribute redirects the
+    # whole app to the fake DB for the duration of ONE test. monkeypatch undoes
+    # it automatically afterward.
+    monkeypatch.setattr(database_module, "db", mock_db)
 
     # Using TestClient as a context manager (`with ...`) runs the app's startup
     # lifespan — which creates the unique index on users.email. That now runs
