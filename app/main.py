@@ -1,9 +1,11 @@
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pymongo.errors import DuplicateKeyError
 
@@ -48,6 +50,43 @@ async def lifespan(app: FastAPI):
 
 # Hand the lifespan function to FastAPI so it knows to run it.
 app = FastAPI(lifespan=lifespan)
+
+
+# CORS: let a browser frontend on ANOTHER origin call this API from JS.
+# This is a BROWSER rule (the Same-Origin Policy), so it never affects curl
+# or the same-origin /docs page — only real cross-origin JS. add_middleware
+# wraps every response with the right Access-Control-* headers.
+app.add_middleware(
+    CORSMiddleware,
+    # WHICH front-end origins are allowed to read our responses. An "origin"
+    # is scheme + host + port, so :5173 and :3000 are DIFFERENT origins and
+    # both must be listed. These are the usual local dev servers (Vite / CRA);
+    # add your real deployed origin here later. We list them explicitly rather
+    # than using "*" so the rule stays a conscious allow-list.
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    # We authenticate with a Bearer token in the Authorization HEADER, NOT with
+    # cookies, so we don't need "credentials" (cookies / HTTP auth) support.
+    # Leaving this False also keeps us free to broaden allow_origins later
+    # (the spec FORBIDS "*" together with allow_credentials=True).
+    allow_credentials=False,
+    # Which HTTP methods cross-origin JS may use. "*" = all of ours
+    # (GET/POST/PUT/PATCH/DELETE). The browser asks about this in a preflight
+    # OPTIONS request before the real one; the middleware answers it for us.
+    allow_methods=["*"],
+    # Which REQUEST headers the browser may send. "*" covers Authorization and
+    # Content-Type, the two our routes need.
+    allow_headers=["*"],
+    # THE DAY-14 FIX: by default the browser hides custom RESPONSE headers from
+    # JS. Naming X-Total-Count here adds Access-Control-Expose-Headers, so a
+    # frontend's response.headers.get("X-Total-Count") actually returns the
+    # number instead of null.
+    expose_headers=["X-Total-Count"],
+)
 
 
 # Tells FastAPI to look for an "Authorization: Bearer <token>" header.
@@ -379,17 +418,36 @@ async def list_posts(
     response: Response,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=10, ge=1, le=100),
+    # Optional free-text search over the post TITLE. It's a QUERY param like
+    # skip/limit (?q=...). No default value that's a real string — default=None
+    # means "if the client leaves ?q off, q is None" = search nothing, list all.
+    q: str | None = Query(default=None),
 ):
-    # HOW MANY posts match in TOTAL (ignoring skip/limit). count_documents
-    # takes the SAME filter as the find below — here {} = "all posts" — so the
-    # count always agrees with what we're paging. The client divides this by
-    # `limit` to know how many pages exist. Headers are strings, so str(...).
-    total = await db["posts"].count_documents({})
+    # Build the Mongo filter ONCE, then feed the SAME object to BOTH
+    # count_documents and find below. That's the Day-14 rule: the count must use
+    # the same filter as the query, so X-Total-Count reflects the SEARCH result,
+    # not the whole collection. Default {} = "all posts" (unchanged behavior).
+    query_filter = {}
+    if q:
+        # `if q` is true only for a real, non-empty string (None and "" are both
+        # falsy) — so an absent OR blank ?q= means "no filter", list everything.
+        #
+        # q is untrusted user text, so we do NOT drop it straight into a regex:
+        # characters like ( [ . * are regex syntax and could match wrongly or
+        # error on bad input. re.escape(q) turns it into a LITERAL substring, and
+        # "$options": "i" makes the match case-INSENSITIVE. So ?q=hello finds
+        # "Hello World", "say HELLO", etc., anywhere in the title.
+        query_filter = {"title": {"$regex": re.escape(q), "$options": "i"}}
+
+    # HOW MANY posts match in TOTAL (ignoring skip/limit). Same filter as the
+    # find below, so with ?q=... this counts only the matching posts, and
+    # without it counts every post. Headers are strings, so str(...).
+    total = await db["posts"].count_documents(query_filter)
     response.headers["X-Total-Count"] = str(total)
 
     posts = []
 
-    # find() with no filter = every post, but we no longer walk them all.
+    # find(query_filter) = every post, or only the ?q= matches when searching.
     # .sort("created_at", -1) still orders NEWEST first, THEN:
     #   .skip(skip)   jumps over the first `skip` posts (the offset)
     #   .limit(limit) stops after `limit` posts (the page size)
@@ -398,7 +456,7 @@ async def list_posts(
     # regardless of how we chain them, but reading sort->skip->limit keeps
     # the intent obvious.
     async for document in (
-        db["posts"].find().sort("created_at", -1).skip(skip).limit(limit)
+        db["posts"].find(query_filter).sort("created_at", -1).skip(skip).limit(limit)
     ):
         posts.append(
             PostOut(
