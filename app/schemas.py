@@ -28,12 +28,30 @@ class LoginRequest(BaseModel):
 
 
 # What WE send back after a successful login (the "output" shape).
-# - access_token: the signed JWT string the client will store and reuse.
+# - access_token: the SHORT-lived JWT sent on every protected request.
+# - refresh_token: the LONG-lived JWT the client keeps to get fresh access
+#   tokens (via /refresh) without logging in again.
 # - token_type: "bearer" is the standard label that tells the client how
-#   to send it back later: in a header "Authorization: Bearer <token>".
+#   to send the ACCESS token back later: "Authorization: Bearer <token>".
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
+
+
+# What WE send back from /refresh (the "output" shape). Only a NEW access token
+# — the refresh token the client already holds is unchanged (we don't rotate it
+# here), so there's nothing new to return but the fresh access token.
+class AccessToken(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+# What the CLIENT sends to /refresh and /logout (the "input" shape). The refresh
+# token travels in the JSON BODY, not the Authorization header — that header is
+# reserved for the access token on protected routes.
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 
 # What the CLIENT sends us to create a post (the "input" shape).

@@ -20,11 +20,15 @@ def test_startup_creates_all_indexes(client):
     users = asyncio.run(database.db["users"].index_information())
     posts = asyncio.run(database.db["posts"].index_information())
     comments = asyncio.run(database.db["comments"].index_information())
+    refresh_tokens = asyncio.run(database.db["refresh_tokens"].index_information())
 
     # The original unique email index (Day 4) is still there.
     assert "email" in indexed_fields(users)
 
-    # The three new performance indexes (Day 17).
+    # The three performance indexes (Day 17).
     assert "author_id" in indexed_fields(posts)
     assert "created_at" in indexed_fields(posts)
     assert "post_id" in indexed_fields(comments)
+
+    # The refresh-token allowlist index (Day 19).
+    assert "jti" in indexed_fields(refresh_tokens)

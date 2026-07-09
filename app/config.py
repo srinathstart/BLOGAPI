@@ -12,12 +12,17 @@ DB_NAME = os.getenv("DB_NAME")
 # tokens, so it lives in .env (a secret), never in code.
 JWT_SECRET = os.getenv("JWT_SECRET")
 
-# These two are settings, not secrets, so they're fine to keep in code:
+# These are settings, not secrets, so they're fine to keep in code:
 # - ALGORITHM: the signing method JWTs use. HS256 = sign with a shared secret.
-# - ACCESS_TOKEN_EXPIRE_MINUTES: how long a token stays valid before the
-#   user must log in again. 60 minutes is a sensible default.
+# - ACCESS_TOKEN_EXPIRE_MINUTES: how long an ACCESS token stays valid. Kept
+#   SHORT (15 min) on purpose: if one leaks, it dies fast. The user doesn't have
+#   to log in again though — the client silently swaps the refresh token for a
+#   new access token (see POST /refresh).
+# - REFRESH_TOKEN_EXPIRE_DAYS: how long the LONG-lived refresh token lasts. This
+#   is the "stay logged in for a week" token; it can be revoked early via logout.
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 # Fail loudly at startup if a secret is missing, instead of crashing
 # later with a confusing error deep inside the code.

@@ -26,6 +26,11 @@ async def lifespan(app: FastAPI):
     await database.db["comments"].create_index("post_id")
     await database.db["posts"].create_index("created_at")
 
+    # The refresh-token allowlist. Each stored row is one still-valid refresh
+    # token, keyed by its jti. UNIQUE so the same jti can never be stored twice,
+    # and so /refresh's find_one({"jti": ...}) is an index lookup, not a scan.
+    await database.db["refresh_tokens"].create_index("jti", unique=True)
+
     yield
 
 
