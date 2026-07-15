@@ -1,0 +1,33 @@
+# Like .gitignore, but for Docker builds. Anything listed here is NOT sent to the
+# build and NOT copied by COPY — even if a COPY line would otherwise grab it.
+# This is our SECOND line of defence for secrets: the .env never enters the image.
+
+# The virtualenv is host-specific and huge — the image installs its own deps from
+# requirements.txt, so we never want the local venv inside it.
+venv/
+
+# SECRETS — must never be baked into an image (images get pushed to registries
+# and shared). In production the secrets arrive as host ENV VARS instead.
+.env
+
+# Python cache — regenerated as needed, no reason to ship it.
+__pycache__/
+*.pyc
+
+# Tests + test config: not needed to RUN the app in production; leaving them out
+# keeps the image smaller and its attack surface minimal.
+tests/
+conftest.py
+.pytest_cache/
+
+# Local-only / editor / OS noise.
+PROGRESS.txt
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+
+# The Dockerfile itself and this file don't need to be inside the image.
+Dockerfile
+.dockerignore
