@@ -52,4 +52,7 @@ async def get_current_user(
         id=str(document["_id"]),
         username=document["username"],
         email=document["email"],
+        # Read the stored role, defaulting to "user" for pre-roles documents.
+        # This is the value the admin-bypass check downstream relies on.
+        role=document.get("role", "user"),
     )

@@ -14,10 +14,14 @@ class UserCreate(BaseModel):
 # What WE send back to the client (the "output" shape).
 # Notice: there is NO password field here. We never return passwords,
 # not even the hashed version.
+# - role: "user" (normal) or "admin" (can moderate anyone's posts/comments).
+#   Defaulted to "user" so a document written before roles existed (no "role"
+#   field) still validates as an ordinary user instead of blowing up.
 class UserOut(BaseModel):
     id: str
     username: str
     email: EmailStr
+    role: str = "user"
 
 
 # What the client sends to log in (the "input" shape for /login).

@@ -118,8 +118,8 @@ async def update_comment(
             status_code=404, detail="No comment found on that post with that id."
         )
 
-    # Ownership check: not yours -> 403.
-    if comment["author_id"] != current_user.id:
+    # Author OR admin may edit; anyone else -> 403 (admin bypasses ownership).
+    if comment["author_id"] != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="You can only edit your own comments.")
 
     await database.db["comments"].update_one(
@@ -160,7 +160,8 @@ async def delete_comment(
             status_code=404, detail="No comment found on that post with that id."
         )
 
-    if comment["author_id"] != current_user.id:
+    # Author OR admin may delete; anyone else -> 403 (admin bypasses ownership).
+    if comment["author_id"] != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="You can only delete your own comments.")
 
     await database.db["comments"].delete_one({"_id": comment_object_id})

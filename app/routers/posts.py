@@ -108,8 +108,9 @@ async def update_post(
     if document is None:
         raise HTTPException(status_code=404, detail="No post found with that id.")
 
-    # Ownership check: not yours -> 403.
-    if document["author_id"] != current_user.id:
+    # Ownership check: author OR admin may edit; anyone else -> 403. That extra
+    # "and not admin" clause IS the moderator power — an admin bypasses ownership.
+    if document["author_id"] != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="You can only edit your own posts.")
 
     await database.db["posts"].update_one(
@@ -141,7 +142,8 @@ async def patch_post(
     if document is None:
         raise HTTPException(status_code=404, detail="No post found with that id.")
 
-    if document["author_id"] != current_user.id:
+    # Author OR admin may edit; anyone else -> 403 (admin bypasses ownership).
+    if document["author_id"] != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="You can only edit your own posts.")
 
     # Only the fields the client actually sent, dropping any explicit nulls.
@@ -184,7 +186,8 @@ async def delete_post(
     if document is None:
         raise HTTPException(status_code=404, detail="No post found with that id.")
 
-    if document["author_id"] != current_user.id:
+    # Author OR admin may delete; anyone else -> 403 (admin bypasses ownership).
+    if document["author_id"] != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="You can only delete your own posts.")
 
     await database.db["posts"].delete_one({"_id": object_id})

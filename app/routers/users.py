@@ -22,6 +22,10 @@ async def create_user(new_user: UserCreate):
         "username": new_user.username,
         "email": new_user.email,
         "hashed_password": hashed,
+        # Everyone starts as a normal "user". Becoming "admin" is a manual step
+        # (edit the document directly in the DB) — there is deliberately no
+        # public route to promote yourself.
+        "role": "user",
     }
     # The unique email index makes this fail on a duplicate; catch it -> 400.
     try:
@@ -33,6 +37,7 @@ async def create_user(new_user: UserCreate):
         id=str(result.inserted_id),
         username=new_user.username,
         email=new_user.email,
+        role="user",
     )
 
 
@@ -53,6 +58,7 @@ async def list_users(
                 id=str(document["_id"]),
                 username=document["username"],
                 email=document["email"],
+                role=document.get("role", "user"),
             )
         )
     return users
@@ -81,6 +87,7 @@ async def get_user(user_id: str):
         id=str(document["_id"]),
         username=document["username"],
         email=document["email"],
+        role=document.get("role", "user"),
     )
 
 
